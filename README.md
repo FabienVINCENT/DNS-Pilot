@@ -21,7 +21,24 @@ Puis lancez **DNS Pilot** depuis le Finder ou Spotlight. L'app n'apparaît que d
 
 Pour le développement : `swift run DNSPilot` (ou `make run`). Attention : le launch at login et la lecture du SSID exigent le bundle `.app` — via `swift run`, ces deux fonctions sont indisponibles (macOS les lie à l'identité du bundle).
 
-> Le bundle est signé **ad hoc** (`codesign --sign -`) : parfait pour un usage local. Ne le distribuez pas tel quel — sur une autre machine, Gatekeeper le bloquerait (il faudrait une signature Developer ID + notarisation).
+> Le bundle est signé **ad hoc** (`codesign --sign -`) : parfait pour un usage local. Sur une autre machine, Gatekeeper bloque le premier lancement — voir la section [Releases](#releases--dmg-via-github-actions).
+
+## Releases : DMG via GitHub Actions
+
+Chaque tag `vX.Y.Z` poussé sur GitHub déclenche le workflow [`release.yml`](.github/workflows/release.yml) : build sur un runner macOS, création de `DNS-Pilot-X.Y.Z.dmg` (l'app + un raccourci vers /Applications), checksum SHA-256, puis publication d'une **GitHub Release** avec notes générées automatiquement.
+
+Publier une version :
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+La version du tag est injectée au build dans l'Info.plist (`CFBundleShortVersionString`) et `CFBundleVersion` reçoit le numéro de run Actions — visible dans *Préférences › Général › À propos*. Un déclenchement manuel du workflow (*Run workflow* dans l'onglet Actions) produit un DMG de test en artefact, sans créer de Release.
+
+En local : `make dmg` (ou `make dmg VERSION=1.2.3`).
+
+> ⚠️ Le DMG est signé **ad hoc** et non notarisé (aucun compte Apple Developer requis). Au premier lancement sur une autre machine, macOS le bloque : autorisez-le via *Réglages Système › Confidentialité et sécurité › « Ouvrir quand même »*, ou `xattr -dr com.apple.quarantine "/Applications/DNS Pilot.app"`. Pour une distribution publique propre, il faudrait ajouter au workflow une signature Developer ID + notarisation.
 
 ## Utilisation
 
