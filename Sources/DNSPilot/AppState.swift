@@ -19,6 +19,14 @@ struct AdGuardInfo: Equatable {
     var protectionEnabled = true
     var queries: Int?
     var blocked: Int?
+    /// Derniers domaines bloqués (journal des requêtes), pour le déblocage en 1 clic.
+    var recentlyBlocked: [String] = []
+}
+
+/// Latence d'un profil, mesurée par une requête DNS vers son premier serveur.
+enum ProfileLatency: Equatable {
+    case reachable(milliseconds: Int)
+    case unreachable
 }
 
 /// Coordinateur central : état courant (interface, DNS, santé), actions,
@@ -51,6 +59,10 @@ final class AppState: ObservableObject {
     @Published private(set) var passwordlessConfigured = false
     @Published private(set) var failover: FailoverState?
     @Published private(set) var adguardInfo: AdGuardInfo?
+    @Published private(set) var profileLatencies: [UUID: ProfileLatency] = [:]
+    /// Throttle des sondes de latence : le refresh périodique (30 s) est fréquent,
+    /// inutile de bombarder les serveurs à chaque relecture d'état.
+    private var lastLatencyProbe: Date?
 
     init() {
         PreferenceKeys.registerDefaults()
@@ -103,13 +115,37 @@ final class AppState: ObservableObject {
 
     // MARK: - Actions utilisateur
 
-    func refresh() {
+    func refresh(forceLatencyProbe: Bool = false) {
+        probeProfileLatencies(force: forceLatencyProbe)
         Task.detached(priority: .utility) { [dnsManager] in
             let service = dnsManager.activeService()
             let servers = service.map { dnsManager.currentDNSServers(service: $0.name) } ?? []
             let passwordless = dnsManager.isPasswordlessConfigured()
             await MainActor.run {
                 self.update(serviceName: service?.name, servers: servers, passwordless: passwordless)
+            }
+        }
+    }
+
+    /// Sonde la latence du premier serveur de chaque profil (une requête DNS UDP
+    /// chacun). Throttlé à une passe toutes les 25 s, sauf demande explicite.
+    private func probeProfileLatencies(force: Bool) {
+        let now = Date()
+        if !force, let last = lastLatencyProbe, now.timeIntervalSince(last) < 25 { return }
+        lastLatencyProbe = now
+        for profile in profileStore.profiles {
+            guard let server = profile.servers.first else { continue }
+            let id = profile.id
+            healthChecker.measureLatency(server: server) { [weak self] elapsed in
+                Task { @MainActor in
+                    let latency: ProfileLatency
+                    if let elapsed {
+                        latency = .reachable(milliseconds: Int((elapsed * 1000).rounded()))
+                    } else {
+                        latency = .unreachable
+                    }
+                    self?.profileLatencies[id] = latency
+                }
             }
         }
     }
@@ -325,6 +361,26 @@ final class AppState: ObservableObject {
         NSWorkspace.shared.open(info.baseURL)
     }
 
+    /// Débloque un domaine du journal en ajoutant une règle d'autorisation
+    /// `@@||domaine^` aux règles utilisateur d'AdGuard Home.
+    func unblockDomain(_ domain: String) {
+        guard let client = adguardClient() else { return }
+        Task { [weak self] in
+            do {
+                try await client.allow(domain: domain)
+                NotificationManager.shared.post(
+                    title: "AdGuard Home",
+                    body: "« \(domain) » autorisé (règle @@||\(domain)^)."
+                )
+            } catch {
+                await MainActor.run {
+                    self?.presentError("AdGuard Home : \(error.localizedDescription)")
+                }
+            }
+            await MainActor.run { self?.refreshAdGuardInfo() }
+        }
+    }
+
     /// Force une resynchronisation (utilisé par les Préférences après un test réussi).
     func refreshAdGuard() {
         refreshAdGuardInfo()
@@ -363,11 +419,14 @@ final class AppState: ObservableObject {
             do {
                 let status = try await client.status()
                 let stats = try? await client.stats()
+                // Best effort : journal désactivé ou version d'AGH sans le filtre → liste vide.
+                let recentlyBlocked = (try? await client.recentBlockedDomains()) ?? []
                 self.adguardInfo = AdGuardInfo(
                     baseURL: client.baseURL,
                     protectionEnabled: status.protectionEnabled,
                     queries: stats?.queries,
-                    blocked: stats?.blocked
+                    blocked: stats?.blocked,
+                    recentlyBlocked: recentlyBlocked
                 )
             } catch AdGuardError.unauthorized {
                 self.adguardInfo = AdGuardInfo(baseURL: client.baseURL, authRequired: true)
