@@ -11,6 +11,7 @@ struct DNSPilotApp: App {
             MenuContent()
                 .environmentObject(appState)
                 .environmentObject(appState.profileStore)
+                .environmentObject(appState.updater)
         } label: {
             Image(systemName: appState.iconName)
         }
@@ -20,6 +21,7 @@ struct DNSPilotApp: App {
             PreferencesView()
                 .environmentObject(appState)
                 .environmentObject(appState.profileStore)
+                .environmentObject(appState.updater)
         }
     }
 }

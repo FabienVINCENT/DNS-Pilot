@@ -17,6 +17,10 @@ enum PreferenceKeys {
     static let adguardURL = "adguardInstanceURL"
     /// Identifiant AdGuard Home (le mot de passe vit dans le trousseau).
     static let adguardUsername = "adguardInstanceUsername"
+    /// Vérification automatique des mises à jour (GitHub Releases, une fois par jour).
+    static let updateCheck = "updateCheckEnabled"
+    /// Dernière version signalée par notification — pour ne notifier qu'une fois.
+    static let lastNotifiedUpdate = "lastNotifiedUpdateVersion"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -25,6 +29,7 @@ enum PreferenceKeys {
             failoverEnabled: true,
             failoverTarget: "dhcp",
             notifications: true,
+            updateCheck: true,
         ])
     }
 }
