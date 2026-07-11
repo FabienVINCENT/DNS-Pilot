@@ -5,6 +5,7 @@ import AppKit
 struct MenuContent: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var store: ProfileStore
+    @EnvironmentObject private var updater: Updater
 
     var body: some View {
         Text(appState.statusDescription)
@@ -58,6 +59,16 @@ struct MenuContent: View {
 
         Button("Actualiser l'état") {
             appState.refresh()
+        }
+
+        if let update = updater.availableUpdate {
+            Divider()
+            Button(updater.isInstalling
+                   ? "Mise à jour \(update.version) en cours…"
+                   : "Installer la mise à jour \(update.version)…") {
+                updater.installAvailableUpdate()
+            }
+            .disabled(updater.isInstalling)
         }
 
         Divider()

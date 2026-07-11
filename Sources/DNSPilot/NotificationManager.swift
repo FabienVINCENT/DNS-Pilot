@@ -11,7 +11,7 @@ final class NotificationManager {
 
     func post(title: String, body: String) {
         guard UserDefaults.standard.bool(forKey: PreferenceKeys.notifications) else { return }
-        guard Bundle.main.bundleURL.pathExtension == "app" else {
+        guard AppInfo.isBundled else {
             NSLog("DNSPilot: notification (hors bundle) — %@ : %@", title, body)
             return
         }

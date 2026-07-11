@@ -270,8 +270,10 @@ private struct AdGuardTab: View {
 private struct GeneralTab: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var store: ProfileStore
+    @EnvironmentObject private var updater: Updater
     @ObservedObject var ssidProvider: SSIDProvider
     @AppStorage(PreferenceKeys.autoSwitch) private var autoSwitch = true
+    @AppStorage(PreferenceKeys.updateCheck) private var updateCheck = true
     @AppStorage(PreferenceKeys.rememberAdmin) private var rememberAdmin = true
     @AppStorage(PreferenceKeys.failoverEnabled) private var failoverEnabled = true
     @AppStorage(PreferenceKeys.failoverTarget) private var failoverTarget = "dhcp"
@@ -360,6 +362,35 @@ private struct GeneralTab: View {
                         NSWorkspace.shared.activateFileViewerSelecting([ProfileStore.fileURL])
                     }
                 }
+            }
+
+            Section("Mises à jour") {
+                Toggle("Vérifier automatiquement (une fois par jour)", isOn: $updateCheck)
+                    .onChange(of: updateCheck) { _, enabled in
+                        if enabled { updater.checkNow() }
+                    }
+                HStack(spacing: 10) {
+                    Button("Rechercher maintenant") { updater.checkNow() }
+                        .disabled(updater.state == .checking || updater.isInstalling)
+                    if let update = updater.availableUpdate {
+                        Button("Installer la version \(update.version)") {
+                            updater.installAvailableUpdate()
+                        }
+                        .disabled(updater.isInstalling || !AppInfo.isBundled)
+                        Button("Notes de version…") { updater.openReleasePage() }
+                    }
+                    if updater.state == .checking || updater.isInstalling {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                if let status = updater.statusText {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Les mises à jour viennent des Releases GitHub du projet : DMG vérifié (SHA-256 contre checksums.txt), puis l'app se remplace et se relance toute seule. Rien n'est installé sans votre clic.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("À propos") {

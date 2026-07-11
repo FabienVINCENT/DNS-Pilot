@@ -38,7 +38,20 @@ La version du tag est injectée au build dans l'Info.plist (`CFBundleShortVersio
 
 En local : `make dmg` (ou `make dmg VERSION=1.2.3`).
 
-> ⚠️ Le DMG est signé **ad hoc** et non notarisé (aucun compte Apple Developer requis). Au premier lancement sur une autre machine, macOS le bloque : autorisez-le via *Réglages Système › Confidentialité et sécurité › « Ouvrir quand même »*, ou `xattr -dr com.apple.quarantine "/Applications/DNS Pilot.app"`. Pour une distribution publique propre, il faudrait ajouter au workflow une signature Developer ID + notarisation.
+> ⚠️ Le DMG est signé **ad hoc** et non notarisé (aucun compte Apple Developer requis). Au premier lancement sur une autre machine, macOS le bloque : autorisez-le via *Réglages Système › Confidentialité et sécurité › « Ouvrir quand même »*, ou `xattr -dr com.apple.quarantine "/Applications/DNS Pilot.app"`. Pour une distribution publique propre, il faudrait ajouter au workflow une signature Developer ID + notarisation. Ce blocage ne concerne que la première installation manuelle : les [mises à jour automatiques](#mises-à-jour-automatiques) passent sans.
+
+## Mises à jour automatiques
+
+DNS Pilot vérifie une fois par jour (et au lancement) si une nouvelle Release GitHub existe — une simple requête à l'API, silencieuse. Quand c'est le cas : notification (une seule par version) et entrée **« Installer la mise à jour X.Y.Z… »** dans le menu, également disponible dans *Préférences › Général › Mises à jour* (où la vérification automatique se désactive).
+
+L'installation ne démarre que sur un clic explicite, puis tout est automatique : téléchargement du DMG de la Release, **SHA-256 vérifié** contre le `checksums.txt` publié par la CI, montage, contrôle que le bundle annonce bien la version promise, remplacement du bundle en place et relance de l'app. Comme c'est l'app elle-même qui télécharge, l'attribut quarantine est retiré au passage : **pas de blocage Gatekeeper sur les mises à jour**, contrairement au premier lancement manuel d'un DMG.
+
+Garde-fous :
+
+- Checksum absent, SHA-256 divergent ou version inattendue dans le DMG → abandon, rien n'est touché.
+- Le remplacement du bundle est fait par un petit script détaché après la fermeture de l'app ; si la pose de la nouvelle version échoue, **l'ancienne est restaurée** telle quelle.
+- Aucun privilège requis : le bundle appartient à l'utilisateur (`~/Applications` ou `/Applications`) — la règle sudoers n'est pas concernée. Si le dossier n'est pas modifiable, l'app le dit et il faut mettre à jour à la main.
+- Limite assumée : app ad hoc non notarisée, donc la confiance repose sur HTTPS + l'intégrité du dépôt GitHub (le checksum garantit un téléchargement intact, pas une signature d'éditeur). Indisponible via `swift run` (pas de bundle à remplacer).
 
 ## Utilisation
 
@@ -48,6 +61,7 @@ Le menu propose :
 - **DHCP (auto)** — supprime les DNS manuels, retour aux DNS du DHCP.
 - **Vider le cache DNS** — `dscacheutil -flushcache` + `killall -HUP mDNSResponder`.
 - **Actualiser l'état** — force une relecture (faite aussi automatiquement toutes les 30 s et à chaque changement de réseau).
+- **Installer la mise à jour X.Y.Z…** — n'apparaît que lorsqu'une nouvelle Release est disponible (voir [Mises à jour automatiques](#mises-à-jour-automatiques)).
 - **Préférences…** — deux onglets : *Profils* (add/edit/delete, SSID de bascule auto, URL DoH) et *Général* (launch at login, bascule auto, autorisation admin).
 
 L'interface active est détectée via la route par défaut (`route -n get default`), mappée sur `networksetup -listnetworkserviceorder`. Si la route par défaut passe par un tunnel (`utun*` : Tailscale, VPN…), DNS Pilot retombe sur le premier service physique actif de l'ordre système — c'est bien lui qu'il faut configurer, `networksetup` ne connaissant pas les interfaces de tunnel.
@@ -159,6 +173,7 @@ Sources/DNSPilot/
 ├── NotificationManager.swift# Notifications macOS (UserNotifications)
 ├── SSIDProvider.swift       # SSID courant via CoreWLAN + autorisation CoreLocation
 ├── DoHProfileGenerator.swift# Génère le .mobileconfig com.apple.dnsSettings.managed
+├── Updater.swift            # Mises à jour : API GitHub Releases, SHA-256, swap du bundle + relance
 ├── AppSettings.swift        # Clés UserDefaults + wrapper SMAppService (launch at login)
 ├── Models.swift             # DNSProfile (Codable : servers, autoSSIDs, dohURL)
 ├── MenuContent.swift        # Menu déroulant (profils, AdGuard, failover)

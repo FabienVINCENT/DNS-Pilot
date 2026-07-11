@@ -29,6 +29,7 @@ final class AppState: ObservableObject {
     let profileStore = ProfileStore()
     let healthChecker = HealthChecker()
     let ssidProvider = SSIDProvider()
+    let updater = Updater()
     private let dnsManager = DNSManager()
     private let pathMonitor = NWPathMonitor()
     private var refreshTimer: Timer?
