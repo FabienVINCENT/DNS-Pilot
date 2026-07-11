@@ -361,6 +361,10 @@ private struct GeneralTab: View {
                     }
                 }
             }
+
+            Section("À propos") {
+                LabeledContent("Version", value: AppInfo.display)
+            }
         }
         .formStyle(.grouped)
     }

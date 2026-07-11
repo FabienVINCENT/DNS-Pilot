@@ -1,7 +1,12 @@
 APP     = dist/DNS Pilot.app
 BIN     = .build/release/DNSPilot
+# Version injectée dans l'Info.plist du bundle. Par défaut celle du dépôt ;
+# surchargez avec `make dmg VERSION=1.2.3 BUILD=42` (c'est ce que fait la CI).
+VERSION ?= $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist 2>/dev/null || echo 1.0.0)
+BUILD   ?= 1
+DMG     = dist/DNS-Pilot-$(VERSION).dmg
 
-.PHONY: build app install run clean
+.PHONY: build app dmg install run clean
 
 ## Compile le binaire en mode release
 build:
@@ -13,8 +18,20 @@ app: build
 	mkdir -p "$(APP)/Contents/MacOS"
 	cp "$(BIN)" "$(APP)/Contents/MacOS/DNSPilot"
 	cp Support/Info.plist "$(APP)/Contents/Info.plist"
+	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" "$(APP)/Contents/Info.plist"
+	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD)" "$(APP)/Contents/Info.plist"
 	codesign --force --sign - "$(APP)"
-	@echo "✓ Bundle créé : $(APP)"
+	@echo "✓ Bundle créé : $(APP) (v$(VERSION), build $(BUILD))"
+
+## Construit l'image disque dist/DNS-Pilot-$(VERSION).dmg (app + raccourci /Applications)
+dmg: app
+	rm -rf dist/dmg "$(DMG)"
+	mkdir -p dist/dmg
+	cp -R "$(APP)" dist/dmg/
+	ln -s /Applications dist/dmg/Applications
+	hdiutil create -volname "DNS Pilot $(VERSION)" -srcfolder dist/dmg -ov -format UDZO "$(DMG)"
+	rm -rf dist/dmg
+	@echo "✓ DMG créé : $(DMG)"
 
 ## Installe dans ~/Applications
 install: app

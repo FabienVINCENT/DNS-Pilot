@@ -1,0 +1,75 @@
+# Build du DMG et publication d'une GitHub Release.
+#
+# Déclencheurs :
+#   - push d'un tag `vX.Y.Z` → build + Release GitHub avec le DMG attaché
+#   - manuel (Run workflow)  → build de test, DMG en artefact, pas de Release
+#
+# La version du tag (sans le `v`) est injectée dans CFBundleShortVersionString ;
+# CFBundleVersion reçoit le numéro de run Actions.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version du build de test (ex. 1.0.0)"
+        required: false
+        default: "0.0.0-test"
+
+permissions:
+  contents: write
+
+jobs:
+  build-dmg:
+    name: Build DMG (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Déterminer la version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version : $VERSION (build $GITHUB_RUN_NUMBER)"
+
+      - name: Build .app + DMG
+        run: make dmg VERSION="${{ steps.version.outputs.version }}" BUILD="$GITHUB_RUN_NUMBER"
+
+      - name: Checksums SHA-256
+        run: |
+          cd dist
+          shasum -a 256 *.dmg > checksums.txt
+          cat checksums.txt
+
+      - name: Upload de l'artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DNS-Pilot-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.dmg
+            dist/checksums.txt
+
+      - name: Publier la GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" &>/dev/null; then
+            # Re-run du workflow : la Release existe déjà, on remplace les fichiers.
+            gh release upload "$GITHUB_REF_NAME" dist/*.dmg dist/checksums.txt \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/checksums.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DNS Pilot ${{ steps.version.outputs.version }}" \
+              --generate-notes \
+              --verify-tag
+          fi
