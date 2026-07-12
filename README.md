@@ -57,7 +57,7 @@ Garde-fous :
 
 Le menu propose :
 
-- **La liste des profils DNS** (nom + serveurs) — le profil actif est coché. Un clic l'applique à l'interface réseau courante.
+- **La liste des profils DNS** (nom + serveurs + **latence**, ex. `· 12 ms`, ou `· ne répond pas`) — le profil actif est coché. Un clic l'applique à l'interface réseau courante. La latence est mesurée par une vraie requête DNS UDP vers le premier serveur de chaque profil, toutes les 30 s environ et à chaque « Actualiser l'état ».
 - **DHCP (auto)** — supprime les DNS manuels, retour aux DNS du DHCP.
 - **Vider le cache DNS** — `dscacheutil -flushcache` + `killall -HUP mDNSResponder`.
 - **Actualiser l'état** — force une relecture (faite aussi automatiquement toutes les 30 s et à chaque changement de réseau).
@@ -147,7 +147,8 @@ L'instance AdGuard Home est une **configuration globale** (*Préférences › Ad
 La section du menu propose :
 
 - **Statut** : protection activée/suspendue, requêtes bloquées / totales (fenêtre de stats du serveur, 24 h par défaut).
-- **« Suspendre le blocage 5 min »** — le geste classique quand un site casse à cause d'un filtre. La réactivation est gérée côté serveur (paramètre `duration` de l'API), donc même si l'app quitte, la protection revient.
+- **« Suspendre le blocage 5 min »** — le geste marteau quand un site casse à cause d'un filtre. La réactivation est gérée côté serveur (paramètre `duration` de l'API), donc même si l'app quitte, la protection revient.
+- **« Débloquer un domaine récent »** — le geste scalpel : le sous-menu liste les derniers domaines bloqués (journal des requêtes, dédupliqués, 8 max). Un clic ajoute la règle d'autorisation `@@||domaine^` aux règles utilisateur — prioritaire sur les listes de blocage, et **permanente** (à retirer dans l'interface AGH, *Filtres › Règles de filtrage personnalisées*). Le sous-menu n'apparaît que si le journal des requêtes est activé côté serveur.
 - **« Réactiver la protection »** quand elle est suspendue.
 - **« Ouvrir l'interface AdGuard Home… »**.
 
@@ -167,8 +168,8 @@ Sources/DNSPilot/
 ├── AppState.swift           # Coordinateur @MainActor : état, actions, bascule auto SSID, failover, AdGuard
 ├── DNSManager.swift         # networksetup : lecture libre, écriture sudo -n → AppleScript ; règle sudoers (visudo -c)
 ├── ProfileStore.swift       # profiles.json (Application Support), ObservableObject
-├── HealthChecker.swift      # Requête DNS UDP artisanale toutes les 60 s, double tentative (Network.framework)
-├── AdGuardClient.swift      # API AdGuard Home (status/stats/protection), détection auto, résolution d'hôte
+├── HealthChecker.swift      # Requête DNS UDP artisanale toutes les 60 s, double tentative, mesure de latence (Network.framework)
+├── AdGuardClient.swift      # API AdGuard Home (status/stats/protection/querylog/règles), détection auto, résolution d'hôte
 ├── Keychain.swift           # Mot de passe AdGuard dans le trousseau macOS
 ├── NotificationManager.swift# Notifications macOS (UserNotifications)
 ├── SSIDProvider.swift       # SSID courant via CoreWLAN + autorisation CoreLocation

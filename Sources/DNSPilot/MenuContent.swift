@@ -20,7 +20,7 @@ struct MenuContent: View {
         Group {
             ForEach(store.profiles) { profile in
                 Toggle(isOn: binding(for: profile)) {
-                    Text("\(profile.name) — \(profile.servers.joined(separator: ", "))")
+                    Text(profileLabel(profile))
                 }
             }
             Toggle(isOn: dhcpBinding) {
@@ -44,6 +44,17 @@ struct MenuContent: View {
                         appState.resumeAdGuard()
                     }
                 }
+                if !adguard.recentlyBlocked.isEmpty {
+                    Menu("Débloquer un domaine récent") {
+                        Text("Ajoute une règle d'autorisation @@||domaine^")
+                        Divider()
+                        ForEach(adguard.recentlyBlocked, id: \.self) { domain in
+                            Button(domain) {
+                                appState.unblockDomain(domain)
+                            }
+                        }
+                    }
+                }
             }
             Button("Ouvrir l'interface AdGuard Home…") {
                 appState.openAdGuardUI()
@@ -58,7 +69,7 @@ struct MenuContent: View {
         .disabled(appState.isBusy)
 
         Button("Actualiser l'état") {
-            appState.refresh()
+            appState.refresh(forceLatencyProbe: true)
         }
 
         if let update = updater.availableUpdate {
@@ -82,6 +93,19 @@ struct MenuContent: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: .command)
+    }
+
+    private func profileLabel(_ profile: DNSProfile) -> String {
+        var label = "\(profile.name) — \(profile.servers.joined(separator: ", "))"
+        switch appState.profileLatencies[profile.id] {
+        case .reachable(let ms)?:
+            label += " · \(ms < 1 ? "<1" : String(ms)) ms"
+        case .unreachable?:
+            label += " · ne répond pas"
+        case nil:
+            break
+        }
+        return label
     }
 
     private func adguardStatusLine(_ info: AdGuardInfo) -> String {

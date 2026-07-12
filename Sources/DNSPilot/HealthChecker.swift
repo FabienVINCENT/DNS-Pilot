@@ -64,46 +64,58 @@ final class HealthChecker: ObservableObject {
     }
 
     /// Envoie une requête DNS au serveur et attend une réponse dans le délai imparti.
-    /// Tout (état, timeout, réception) s'exécute sur `queue` — pas de course sur `finished`.
     /// Publique : sert aussi au failover pour surveiller le retour du serveur d'origine.
     func probeOnce(server: String, completion: @escaping (Bool) -> Void) {
+        measureLatency(server: server) { completion($0 != nil) }
+    }
+
+    /// Comme `probeOnce`, mais renvoie le temps de réponse (nil = pas de réponse valide).
+    /// Tout (état, timeout, réception) s'exécute sur `queue` — pas de course sur `finished`.
+    func measureLatency(server: String, completion: @escaping (TimeInterval?) -> Void) {
         let connection = NWConnection(host: NWEndpoint.Host(server), port: 53, using: .udp)
         let queryID = UInt16.random(in: 1...UInt16.max)
         var finished = false
-        let finish: (Bool) -> Void = { reachable in
+        var sentAt: DispatchTime?
+        let finish: (TimeInterval?) -> Void = { elapsed in
             guard !finished else { return }
             finished = true
             connection.cancel()
-            completion(reachable)
+            completion(elapsed)
         }
 
         connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
+                sentAt = DispatchTime.now()
                 connection.send(
                     content: Self.dnsQuery(id: queryID, host: "apple.com"),
                     completion: .contentProcessed { error in
-                        if error != nil { finish(false) }
+                        if error != nil { finish(nil) }
                     }
                 )
                 connection.receiveMessage { data, _, _, _ in
                     guard let data, data.count >= 12 else {
-                        finish(false)
+                        finish(nil)
                         return
                     }
                     let bytes = [UInt8](data.prefix(2))
                     let responseID = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
-                    finish(responseID == queryID)
+                    guard responseID == queryID, let sentAt else {
+                        finish(nil)
+                        return
+                    }
+                    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - sentAt.uptimeNanoseconds) / 1_000_000_000
+                    finish(elapsed)
                 }
             case .failed:
-                finish(false)
+                finish(nil)
             default:
                 break
             }
         }
 
         connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + timeout) { finish(false) }
+        queue.asyncAfter(deadline: .now() + timeout) { finish(nil) }
     }
 
     /// Construit un paquet de requête DNS minimal (question A/IN, récursion demandée).

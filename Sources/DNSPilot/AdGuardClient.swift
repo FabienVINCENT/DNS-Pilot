@@ -32,12 +32,34 @@ struct AdGuardStats: Decodable {
     }
 }
 
+private struct AdGuardQueryLog: Decodable {
+    struct Entry: Decodable {
+        struct Question: Decodable {
+            let name: String
+        }
+        // Optionnel : une entrée atypique ne doit pas invalider tout le journal.
+        let question: Question?
+    }
+    let data: [Entry]
+}
+
+private struct AdGuardFilteringStatus: Decodable {
+    let userRules: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case userRules = "user_rules"
+    }
+}
+
 /// Client minimal de l'API AdGuard Home (auth HTTP Basic).
 ///
 /// Endpoints utilisés :
-/// - GET  /control/status      → protection activée ?
-/// - GET  /control/stats       → requêtes / bloquées (fenêtre configurée côté AGH, 24 h par défaut)
-/// - POST /control/protection  → activer / suspendre (avec durée en ms)
+/// - GET  /control/status            → protection activée ?
+/// - GET  /control/stats             → requêtes / bloquées (fenêtre configurée côté AGH, 24 h par défaut)
+/// - POST /control/protection        → activer / suspendre (avec durée en ms)
+/// - GET  /control/querylog          → derniers domaines bloqués (response_status=blocked)
+/// - GET  /control/filtering/status  → règles utilisateur existantes
+/// - POST /control/filtering/set_rules → ajout d'une règle d'autorisation @@||domaine^
 final class AdGuardClient {
 
     let baseURL: URL
@@ -125,18 +147,52 @@ final class AdGuardClient {
         _ = try await request(path: "control/protection", method: "POST", jsonBody: body)
     }
 
+    /// Derniers domaines bloqués, dédupliqués, du plus récent au plus ancien.
+    /// Journal désactivé côté serveur → liste vide (pas une erreur).
+    func recentBlockedDomains(maxDomains: Int = 8) async throws -> [String] {
+        let log: AdGuardQueryLog = try await get("control/querylog", queryItems: [
+            URLQueryItem(name: "limit", value: "50"),
+            URLQueryItem(name: "response_status", value: "blocked"),
+        ])
+        var seen = Set<String>()
+        var domains: [String] = []
+        for entry in log.data {
+            guard let domain = entry.question?.name.lowercased() else { continue }
+            guard !domain.isEmpty, seen.insert(domain).inserted else { continue }
+            domains.append(domain)
+            if domains.count == maxDomains { break }
+        }
+        return domains
+    }
+
+    /// Débloque un domaine en ajoutant la règle d'autorisation `@@||domaine^`
+    /// aux règles utilisateur (prioritaire sur les listes de blocage).
+    func allow(domain: String) async throws {
+        let rule = "@@||\(domain)^"
+        let status: AdGuardFilteringStatus = try await get("control/filtering/status")
+        var rules = status.userRules.filter { !$0.isEmpty }
+        guard !rules.contains(rule) else { return }
+        rules.append(rule)
+        _ = try await request(path: "control/filtering/set_rules", method: "POST", jsonBody: ["rules": rules])
+    }
+
     // MARK: - Interne
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        let data = try await request(path: path, method: "GET", jsonBody: nil)
+    private func get<T: Decodable>(_ path: String, queryItems: [URLQueryItem] = []) async throws -> T {
+        let data = try await request(path: path, queryItems: queryItems, method: "GET", jsonBody: nil)
         guard let decoded = try? JSONDecoder().decode(T.self, from: data) else {
             throw AdGuardError.invalidResponse
         }
         return decoded
     }
 
-    private func request(path: String, method: String, jsonBody: [String: Any]?) async throws -> Data {
-        var urlRequest = URLRequest(url: baseURL.appendingPathComponent(path))
+    private func request(path: String, queryItems: [URLQueryItem] = [], method: String, jsonBody: [String: Any]?) async throws -> Data {
+        var url = baseURL.appendingPathComponent(path)
+        if !queryItems.isEmpty, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = queryItems
+            url = components.url ?? url
+        }
+        var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = method
         if let username, let password, !username.isEmpty {
             let token = Data("\(username):\(password)".utf8).base64EncodedString()
