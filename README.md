@@ -127,11 +127,13 @@ Configurez les SSID dans chaque profil (onglet *Profils*). Quand le Mac change d
 
 Renseignez l'URL DoH d'un profil (ex. `https://dns.adguard.com/dns-query`), puis « Générer le profil système (.mobileconfig)… ». DNS Pilot crée un profil de configuration (payload `com.apple.dnsSettings.managed`, avec les IP du profil en bootstrap) dans `~/Downloads` et l'ouvre.
 
-**Limite structurelle** : hors MDM, macOS n'autorise aucune installation silencieuse de profil — il faut terminer manuellement dans Réglages Système › Général › Gestion des appareils (double-clic → Installer). Une fois installé, le DoH **prend le pas** sur les DNS `networksetup` pour tout le système ; pensez à le retirer au même endroit pour revenir aux profils classiques. Le health check (port 53) ne couvre pas le DoH.
+**Limite structurelle** : hors MDM, macOS n'autorise aucune installation silencieuse de profil — il faut terminer manuellement dans Réglages Système › Général › Gestion des appareils (double-clic → Installer). Une fois installé, le DoH **prend le pas** sur les DNS `networksetup` pour tout le système ; pensez à le retirer au même endroit pour revenir aux profils classiques. L'endpoint DoH du profil actif est couvert par son propre health check (voir ci-dessous).
 
 ## Health check & failover
 
 Toutes les 60 s, DNS Pilot envoie une vraie requête DNS UDP (question A `apple.com`, port 53, timeout 2,5 s) au premier serveur du profil actif — via Network.framework, sans processus externe. Une requête perdue est re-vérifiée immédiatement : il faut **deux échecs d'affilée** pour déclarer le serveur muet (icône alerte).
+
+**Health check DoH** : si le profil actif a une URL DoH, l'endpoint est sondé en parallèle au même rythme — la même question DNS, envoyée en POST `application/dns-message` (RFC 8484), réponse validée par l'ID écho, même règle des deux échecs. Un endpoint muet déclenche l'icône alerte, une ligne dans le menu et une notification — mais **pas de failover** : si le profil système DoH est installé, il prend le pas sur les DNS `networksetup`, donc basculer ces derniers ne changerait rien. Retirer le profil DoH (Réglages Système › Gestion des appareils) reste un geste manuel.
 
 **Failover automatique** (activé par défaut, désactivable dans *Général*) : quand le DNS actif est déclaré muet, DNS Pilot bascule sur la **cible de secours** (DHCP par défaut, ou n'importe quel profil — ex. Cloudflare). Il continue de sonder le serveur d'origine toutes les 60 s et **rétablit le profil initial dès qu'il répond** de nouveau. Pendant un failover, l'icône passe en `exclamationmark.shield` (contour) et le menu affiche la panne en cours.
 
@@ -147,7 +149,7 @@ L'instance AdGuard Home est une **configuration globale** (*Préférences › Ad
 La section du menu propose :
 
 - **Statut** : protection activée/suspendue, requêtes bloquées / totales (fenêtre de stats du serveur, 24 h par défaut).
-- **« Suspendre le blocage 5 min »** — le geste marteau quand un site casse à cause d'un filtre. La réactivation est gérée côté serveur (paramètre `duration` de l'API), donc même si l'app quitte, la protection revient.
+- **« Suspendre le blocage »** (1 min / 5 min / 30 min / 1 h) — le geste marteau quand un site casse à cause d'un filtre. La réactivation est gérée côté serveur (paramètre `duration` de l'API), donc même si l'app quitte, la protection revient.
 - **« Débloquer un domaine récent »** — le geste scalpel : le sous-menu liste les derniers domaines bloqués (journal des requêtes, dédupliqués, 8 max). Un clic ajoute la règle d'autorisation `@@||domaine^` aux règles utilisateur — prioritaire sur les listes de blocage, et **permanente** (à retirer dans l'interface AGH, *Filtres › Règles de filtrage personnalisées*). Le sous-menu n'apparaît que si le journal des requêtes est activé côté serveur.
 - **« Réactiver la protection »** quand elle est suspendue.
 - **« Ouvrir l'interface AdGuard Home… »**.
@@ -168,7 +170,7 @@ Sources/DNSPilot/
 ├── AppState.swift           # Coordinateur @MainActor : état, actions, bascule auto SSID, failover, AdGuard
 ├── DNSManager.swift         # networksetup : lecture libre, écriture sudo -n → AppleScript ; règle sudoers (visudo -c)
 ├── ProfileStore.swift       # profiles.json (Application Support), ObservableObject
-├── HealthChecker.swift      # Requête DNS UDP artisanale toutes les 60 s, double tentative, mesure de latence (Network.framework)
+├── HealthChecker.swift      # Requête DNS UDP artisanale toutes les 60 s, double tentative, mesure de latence, sonde DoH RFC 8484
 ├── AdGuardClient.swift      # API AdGuard Home (status/stats/protection/querylog/règles), détection auto, résolution d'hôte
 ├── Keychain.swift           # Mot de passe AdGuard dans le trousseau macOS
 ├── NotificationManager.swift# Notifications macOS (UserNotifications)

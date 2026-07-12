@@ -55,6 +55,7 @@ final class AppState: ObservableObject {
     @Published private(set) var serviceName: String?
     @Published private(set) var currentServers: [String] = []
     @Published private(set) var health: HealthChecker.Status = .unknown
+    @Published private(set) var dohHealth: HealthChecker.Status = .unknown
     @Published private(set) var isBusy = false
     @Published private(set) var passwordlessConfigured = false
     @Published private(set) var failover: FailoverState?
@@ -71,6 +72,13 @@ final class AppState: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] status in
                 Task { @MainActor in self?.applyHealthUpdate(status) }
+            }
+            .store(in: &cancellables)
+
+        healthChecker.$dohStatus
+            .receive(on: RunLoop.main)
+            .sink { [weak self] status in
+                Task { @MainActor in self?.applyDoHHealthUpdate(status) }
             }
             .store(in: &cancellables)
 
@@ -98,12 +106,13 @@ final class AppState: ObservableObject {
             ?? profileStore.profiles.first { Set($0.servers) == Set(currentServers) }
     }
 
-    /// Icône : pleine = DNS custom, contour = DHCP, alerte pleine = DNS muet,
-    /// alerte contour = failover actif (on tourne sur la cible de secours).
+    /// Icône : pleine = DNS custom, contour = DHCP, alerte pleine = DNS muet
+    /// (port 53 ou endpoint DoH), alerte contour = failover actif.
     var iconName: String {
         if failover != nil { return "exclamationmark.shield" }
         if isDHCP { return "shield" }
-        return health == .unreachable ? "exclamationmark.shield.fill" : "shield.fill"
+        let unreachable = health == .unreachable || dohHealth == .unreachable
+        return unreachable ? "exclamationmark.shield.fill" : "shield.fill"
     }
 
     var statusDescription: String {
@@ -228,6 +237,26 @@ final class AppState: ObservableObject {
         health = status
         if status == .unreachable {
             triggerFailoverIfNeeded()
+        }
+    }
+
+    /// Santé de l'endpoint DoH du profil actif. Pas de failover : si le profil
+    /// système DoH est installé, changer les DNS networksetup n'y ferait rien —
+    /// on alerte (icône + menu + notification), la décision reste à l'utilisateur.
+    private func applyDoHHealthUpdate(_ status: HealthChecker.Status) {
+        guard status != dohHealth else { return }
+        let previous = dohHealth
+        dohHealth = status
+        if status == .unreachable {
+            NotificationManager.shared.post(
+                title: "DNS Pilot",
+                body: "L'endpoint DoH du profil actif ne répond plus."
+            )
+        } else if status == .healthy, previous == .unreachable {
+            NotificationManager.shared.post(
+                title: "DNS Pilot",
+                body: "L'endpoint DoH répond de nouveau."
+            )
         }
     }
 
@@ -490,12 +519,20 @@ final class AppState: ObservableObject {
         self.currentServers = servers
         self.passwordlessConfigured = passwordless
         if let primary = servers.first {
-            healthChecker.start(server: primary)
+            healthChecker.start(server: primary, dohURL: activeProfileDoHURL())
         } else {
             healthChecker.stop()
         }
         detectAdGuardIfNeeded()
         refreshAdGuardInfo()
+    }
+
+    /// URL DoH du profil actif, si renseignée (les Préférences stockent nil quand
+    /// le champ est vide, mais un profiles.json édité à la main peut contenir "").
+    private func activeProfileDoHURL() -> URL? {
+        guard let raw = activeProfile?.dohURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        return URL(string: raw)
     }
 
     private func runAction(_ operation: @escaping (DNSManager) throws -> Void) {
