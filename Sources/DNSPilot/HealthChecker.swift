@@ -4,7 +4,8 @@ import Network
 
 /// Vérifie périodiquement (60 s) que le DNS actif répond, en envoyant une
 /// vraie requête DNS UDP (A apple.com) sur le port 53 — aucune dépendance,
-/// pas de shell.
+/// pas de shell. Si le profil actif a une URL DoH, l'endpoint HTTPS est
+/// sondé en parallèle (requête application/dns-message, RFC 8484).
 final class HealthChecker: ObservableObject {
 
     enum Status: Equatable {
@@ -14,18 +15,28 @@ final class HealthChecker: ObservableObject {
     }
 
     @Published private(set) var status: Status = .unknown
+    @Published private(set) var dohStatus: Status = .unknown
 
     private(set) var monitoredServer: String?
+    private(set) var monitoredDoHURL: URL?
     private var timer: Timer?
     private let queue = DispatchQueue(label: "dnspilot.healthcheck")
     private let checkInterval: TimeInterval = 60
     private let timeout: TimeInterval = 2.5
 
+    private lazy var dohSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout + 1
+        return URLSession(configuration: config)
+    }()
+
     /// À appeler depuis le main thread (le Timer s'accroche à la runloop courante).
-    func start(server: String) {
-        guard server != monitoredServer || timer == nil else { return }
+    func start(server: String, dohURL: URL? = nil) {
+        guard server != monitoredServer || dohURL != monitoredDoHURL || timer == nil else { return }
         stop()
         monitoredServer = server
+        monitoredDoHURL = dohURL
         check()
         let timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
             self?.check()
@@ -38,11 +49,17 @@ final class HealthChecker: ObservableObject {
         timer?.invalidate()
         timer = nil
         monitoredServer = nil
+        monitoredDoHURL = nil
         status = .unknown
+        dohStatus = .unknown
     }
 
     private func check() {
-        guard let server = monitoredServer else { return }
+        if let server = monitoredServer { checkServer(server) }
+        if let url = monitoredDoHURL { checkDoH(url) }
+    }
+
+    private func checkServer(_ server: String) {
         probeOnce(server: server) { [weak self] reachable in
             if reachable {
                 self?.publish(.healthy, for: server)
@@ -56,11 +73,54 @@ final class HealthChecker: ObservableObject {
         }
     }
 
+    private func checkDoH(_ url: URL) {
+        probeDoHOnce(url: url) { [weak self] reachable in
+            if reachable {
+                self?.publishDoH(.healthy, for: url)
+                return
+            }
+            // Même politique que l'UDP : deux échecs d'affilée avant d'alerter.
+            self?.probeDoHOnce(url: url) { confirmed in
+                self?.publishDoH(confirmed ? .healthy : .unreachable, for: url)
+            }
+        }
+    }
+
     private func publish(_ newStatus: Status, for server: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.monitoredServer == server else { return }
             self.status = newStatus
         }
+    }
+
+    private func publishDoH(_ newStatus: Status, for url: URL) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.monitoredDoHURL == url else { return }
+            self.dohStatus = newStatus
+        }
+    }
+
+    /// Sonde un endpoint DoH : POST application/dns-message (RFC 8484) avec la
+    /// même question A apple.com que l'UDP, réponse validée par l'ID écho.
+    private func probeDoHOnce(url: URL, completion: @escaping (Bool) -> Void) {
+        let queryID = UInt16.random(in: 1...UInt16.max)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
+        request.httpBody = Self.dnsQuery(id: queryID, host: "apple.com")
+
+        let task = dohSession.dataTask(with: request) { data, response, _ in
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let data, data.count >= 12 else {
+                completion(false)
+                return
+            }
+            let bytes = [UInt8](data.prefix(2))
+            let responseID = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
+            completion(responseID == queryID)
+        }
+        task.resume()
     }
 
     /// Envoie une requête DNS au serveur et attend une réponse dans le délai imparti.

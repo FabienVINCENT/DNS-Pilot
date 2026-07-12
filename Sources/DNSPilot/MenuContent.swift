@@ -14,6 +14,9 @@ struct MenuContent: View {
         } else if appState.health == .unreachable {
             Text("⚠️ Le DNS actif ne répond pas")
         }
+        if appState.dohHealth == .unreachable {
+            Text("⚠️ L'endpoint DoH ne répond pas")
+        }
 
         Divider()
 
@@ -36,8 +39,11 @@ struct MenuContent: View {
             } else {
                 Text(adguardStatusLine(adguard))
                 if adguard.protectionEnabled {
-                    Button("Suspendre le blocage 5 min") {
-                        appState.snoozeAdGuard(minutes: 5)
+                    Menu("Suspendre le blocage") {
+                        Button("1 minute") { appState.snoozeAdGuard(minutes: 1) }
+                        Button("5 minutes") { appState.snoozeAdGuard(minutes: 5) }
+                        Button("30 minutes") { appState.snoozeAdGuard(minutes: 30) }
+                        Button("1 heure") { appState.snoozeAdGuard(minutes: 60) }
                     }
                 } else {
                     Button("Réactiver la protection") {
